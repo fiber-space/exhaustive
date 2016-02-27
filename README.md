@@ -62,13 +62,13 @@ and I recommend to look at the commented source code of the chooser implementati
 
 ### What can we do with state sequences?
 
-Generating all possible state sequences which meet the success conditions isn't a full testcase generation and it is not 
-intended to be one. The actual testcase implementation will be specific for the system under test. Giving meaning to 
+Generating all possible state sequences which meet the success conditions isn't a fully generated testcase and it is 
+not intended to be one. The actual testcase implementation will be specific for the system under test. Giving meaning to 
 the states {"S0", "S1", ...} and state transitions is out of the scope for a library such as `exhaustive.py`. In my 
 experience the interpreter of state sequences is also a rather short piece of code which I would just program straight
 away instead of considering the use of source code generators and other overengineered approaches. It suffices to 
-shorten the testcase specification and set an end to far too many (buggy) test scripts, which cover half of the state 
-transition diagram of your specification.
+shorten the testcase specification and set an end to far too many buggy test scripts, which cover half of the state 
+transition diagram of some technical specification.
 
 ### exhaustive.py is fun to use!
 
