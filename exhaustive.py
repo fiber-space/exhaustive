@@ -3,62 +3,64 @@ from __future__ import print_function
 __all__ = ["ChooserException", "Chooser", "flow", "Chart", "Assignments"]
 
 class ChooserException(Exception):
-    pass
+    "Exception used to indicate nondeterminist execution"
 
 class _ChooserEscape(Exception):
-    "Only used for internal purposes. Don't ever catch this exception in your application code!"
+    "Used for the implementation of the choose/Chooser.apply protocol."
+    "Don't ever catch this exception in your application code!"
 
 class Chooser(object):
-    """
-    A Chooser is a close relative of John McCarthy's amb operator but designed with a different intention.     
-    
-    It is meant to evaluate in sequential order a given function with all possible values presented as choices by the Chooser.
-    
-    If f is a function defined as
+    def __init__(self, chosen = (), stack = None):
+        self._chosen  = chosen           # a list of previously made choices
+        self._stack   = stack            # a list of all lists of choices being made
 
-        def f(chooser):
-            ...
-            x = chooser.choose([1,2,3,4])
-            ...
-
-    then 
-
-        Chooser.apply(f)
-
-    will evaluate f four times, one time for each choice made for x. This replicates the behavior of amb but the emphasis
-    is on the evaluation protocol. The Chooser is not build to express one shot, indeterministic evaluation of f but 
-    deterministic multiple evaluations of f. 
-    """
-    def __init__(self, chosen, stack):
-        self._chosen  = chosen
-        self._stack   = stack
-        self._choosit = iter(chosen)
+        self._choosit = iter(chosen)     # use the iterator on chosen values to emit
+                                         # choices at the call site of choose()
+        if stack is None:
+            self._single_choice = True   # if this value is True the first entry 
+        else:                            # of the choices list in choose(choices) 
+            self._single_choice = False  # will be returned
+            
 
     def choose(self, choices):
         '''
-        Method used to present a list of choices to a function which calls it. There are
-        no constraints on the nature and multiplicity of those choices. 
-        '''        
+        Present a list of choices at the call site of this function.
+        :param choices: a list, tuple of set of values
+        '''
+        # use the first element of choices as a default value
+        if self._single_choice:
+            return choices[0]
         try:
-            # check for chosen value first
+            # get a chosen value first and try to return it as the current
+            # choice
             c = next(self._choosit)
             if c not in choices:
                 raise ChooserException("Program is not deterministic")
             return c
         except StopIteration:
-            # if _choosit was exhausted, build for each value in choices a new
-            # list which will be used as a new chosen list in a subsequent
-            # iteration
+            # if _choosit was exhausted at the site of this choose() call then for each 
+            # value in the choices argument list, create a new chosen list by adding the choice
+            # to the current chosen one. In the next round the iterator won't
+            # fail at this call site because it has an additional choice.
             self._stack.extend([self._chosen + [choice] for choice in choices])
-            # escape the caller of choose() for a next iteration with a fresh
-            # chooser
+            # escape the caller of choose() for a next iteration which uses a fresh
+            # chooser object.
             raise _ChooserEscape
+        
 
     @classmethod
-    def apply(chooser, f):            
+    def apply(chooser_cls, f, *args, **kwds):            
         '''
         An inside-out evaluation of a function f given a chooser. 
-        :param f: a function of a single chooser instance argument.
+
+        :param f: a function which takes at least one `chooser` keyword argument 
+                  and is called line
+
+                  f(*args, chooser = ..., **kwds)
+
+        :returns: a list of all return values of f with respect to the chooser 
+                  iteration. If f returns with None, this None won't be collected 
+                  in the list.
         '''
         results = []
         # collection of lists of choices
@@ -66,8 +68,13 @@ class Chooser(object):
         while stack:
             chosen = stack.pop()
             try:
-                res = f(chooser(chosen, stack))
-                if res:
+                # create a new chooser instance and either build new lists of choices
+                # when the iteration over chosen at the call sites of chooser.choose() fails
+                # with a _ChooserEscape exception or return the evaluation result of f and
+                # collect it
+                res = f(*args, chooser = chooser_cls(chosen, stack), **kwds)
+                # None as return value will be ignored
+                if res is not None:
                     results.append(res)
             except _ChooserEscape:
                 pass
@@ -114,8 +121,8 @@ class Chart:
 
     def execute(self, func):
         '''
-        Wrap a function into a Chart object and create all flows for that function.
-        execute() returns the assignments of that Chart object.
+        Wrap a function into a Chart object and create all flows for that 
+        function. execute() returns the assignments of that Chart object.
         '''
         class SubChart(Chart):
             @flow
@@ -128,27 +135,44 @@ class Chart:
         subchart.create()
         return subchart.assignments
 
-    def fix(self, **assignments):
+    def fix(self, **C):
         '''
-        Building a subset of assignments by using variable constraints or `facts`. The behavior
-        is as follows
+        Building a subset of assignments by using variable constraints C. 
 
-        The fix function doesn't act as a filter. If for example fix(x=1) passes a fact x=1 
-        and A = {'y':0, 'a':5} is in the assignments list, then A will be accepted by fix(). A is
-        'orthogonal' to the constraint imposed by x=1 and fix lets it pass. 
+        Let A be an assignment in the assignment list.
+        
+          if ('x' in A) and ('x' in C) then A is collected only if A['x'] == C['x']
 
-        Use filter() if A should be accepted if and only if A[name] exists and A[name] == value
+        Note that A will also be collected if no such 'x' exists. fix() means 
+        that a variables constraint must not be violated, not that it has to exist. 
+        Use filter() if you want to impose the existence of the constraint.
         '''
-        fixed = self.assignments.fix(**assignments)
+        fixed = self.assignments.fix(**C)
         chart    = self.__class__(self.chooser)
         # accept only dependent solutions as valid assignments
         # for a derived chart
         chart.assignments = fixed
         return chart
 
-    def filter(self, **assignments):
-        chart = self.fix(**assignments)
-        chart.assignments = chart.assignments.filter(**assignments)
+    def filter(self, **constraints):
+        '''
+        Building a subset of assignments by using variable constraints. 
+
+        Let A be an assignment in the assignment list. 
+        
+          A is collected if constraints if a proper sub dictionary which can be 
+          defined as:
+          
+          	There is a dictionary D which has no keys in common with C 
+          	( D and C are disjoint )and A == D.update(C).
+
+        
+        
+        
+        '''
+
+        chart = self.fix(**constraints)
+        chart.assignments = chart.assignments.filter(**constraints)
         return chart
 
     def fetch(self, varname):
@@ -170,8 +194,9 @@ class Assignments:
     '''
     Auxiliary class used to filter through sets of assignments. 
 
-    Here an "assignment" is a dict which originates from binding values to names in function scope. 
-    Usually an assignment is the value of a function returning its vars()
+    Here an "assignment" is a dict which originates from binding values to names 
+    in function scope. Usually an assignment is the value of a function returning 
+    its vars()
 
         def f(self, chooser):
             ...
@@ -191,9 +216,11 @@ class Assignments:
 
     def combine(self, other):
         """
-        Building new assignments by updating each of this assignment set by each of the other.
+        Building new assignments by updating each of this assignment set by each 
+        of the other.
 
-        Note that this operation is not commutative, because update my destroy information.
+        Note that this operation is not commutative, because update my destroy 
+        information.
         """
         if isinstance(other, dict):
             other = Assignments([other])
@@ -249,6 +276,7 @@ class Assignments:
             else:
                 asnlist.append(asgn)
         return asnlist
+
 
 
 ########################### samples ##############################################
@@ -357,7 +385,8 @@ class DoorController(Chart):
                 trans = chooser.choose(["T2:waitTimer", "T3:ready"])
             elif trans in ("T3:ready","T4:closing", "T12:timeout"):
                 states.append((trans, "closing"))            
-                trans = chooser.choose(["T4:closing", "T6:fullyClosed", "T5:buttonInterrupt"])
+                trans = chooser.choose(["T4:closing", "T6:fullyClosed", 
+                	                    "T5:buttonInterrupt"])
             elif trans in ("T6:fullyClosed","T7:closeTimer"):
                 states.append((trans, "closed"))            
                 trans = chooser.choose(["T7:closeTimer", "T8:open"])
@@ -378,6 +407,7 @@ class DoorController(Chart):
             if len(states)==10 and states[-1][1] == "closed":
                 return tuple(states)
 
+########################### tests ##############################################
 
 def test_fix_and_filter():
     chart = ExampleChart()
@@ -436,7 +466,8 @@ def test_fetch():
     acsp = AlgebraicCSP()
     acsp.create()
     primes = acsp.fetch("prime")
-    assert primes == [97, 89, 83, 79, 73, 71, 67, 61, 59, 53, 47, 43, 41, 37, 31, 29, 23, 19, 17, 13, 11, 7, 5, 3, 2]
+    assert primes == [97, 89, 83, 79, 73, 71, 67, 61, 59, 53, 47, 43, 41, 37, 31, 
+                      29, 23, 19, 17, 13, 11, 7, 5, 3, 2]
     solutions = acsp.fetch('(a+b+c)**2 == a*b*c, with a<=b<=c and a,b,c in {1,...30}')
     assert solutions == [(9, 9, 9), (8, 8, 16), (6, 12, 18), (5, 20, 25)]
     print("primes", acsp.fetch("prime"))
@@ -461,6 +492,15 @@ def test_composite_chart():
     assert len(cs) == 16
     assert all(len(x)==4 for x in cs)
 
+def test_single_evaluation():
+	def f(x,y, chooser = Chooser()):
+	    z = chooser.choose([True, False])
+	    if z:
+	        return x+y
+	    else:
+	        return x-y
+	assert f(1,2) == 3
+	assert Chooser.apply(f,1,2) == [-1, 3]	
 
 if __name__ == '__main__':
     test_fix_and_filter()
