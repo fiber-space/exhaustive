@@ -5,15 +5,10 @@ __all__ = ["ChooserException", "Chooser", "flow", "Chart", "Assignments"]
 class ChooserException(Exception):
     "Exception used to indicate nondeterminist execution"
 
-class _ChooserEscape(Exception):
-    "Used for the implementation of the choose/Chooser.apply protocol."
-    "Don't ever catch this exception in your application code!"
-
 class Chooser(object):
     def __init__(self, chosen = (), stack = None):
         self._chosen  = chosen           # a list of previously made choices
         self._stack   = stack            # a list of all lists of choices being made
-
         self._choosit = iter(chosen)     # use the iterator on chosen values to emit
                                          # choices at the call site of choose()
         if stack is None:
@@ -31,21 +26,21 @@ class Chooser(object):
         if self._single_choice:
             return choices[0]
         try:
-            # get a chosen value first and try to return it as the current
-            # choice
+            # get a chosen value first and try to return it as the current choice
             c = next(self._choosit)
             if c not in choices:
-                raise ChooserException("Program is not deterministic")
+                raise ChooserException("Program is not deterministic: %s not in choices %s"%(c, choices))
             return c
         except StopIteration:
             # if _choosit was exhausted at the site of this choose() call then for each 
             # value in the choices argument list, create a new chosen list by adding the choice
             # to the current chosen one. In the next round the iterator won't
             # fail at this call site because it has an additional choice.
-            self._stack.extend([self._chosen + [choice] for choice in choices])
-            # escape the caller of choose() for a next iteration which uses a fresh
-            # chooser object.
-            raise _ChooserEscape
+            self._stack.extend([self._chosen + [choice] for choice in choices[:-1]])
+            # extend current choices
+            choice = choices[-1]
+            self._chosen.append(choice)
+            return choice
         
 
     @classmethod
@@ -67,17 +62,11 @@ class Chooser(object):
         stack   = [[]]
         while stack:
             chosen = stack.pop()
-            try:
-                # create a new chooser instance and either build new lists of choices
-                # when the iteration over chosen at the call sites of chooser.choose() fails
-                # with a _ChooserEscape exception or return the evaluation result of f and
-                # collect it
-                res = f(*args, chooser = chooser_cls(chosen, stack), **kwds)
-                # None as return value will be ignored
-                if res is not None:
-                    results.append(res)
-            except _ChooserEscape:
-                pass
+            # run function with new chooser 
+            res = f(*args, chooser = chooser_cls(chosen, stack), **kwds)
+            # None as return value will be ignored
+            if res is not None:
+                results.append(res)
         return results
 
 def flow(f):
@@ -165,9 +154,6 @@ class Chart:
           
           	There is a dictionary D which has no keys in common with C 
           	( D and C are disjoint )and A == D.update(C).
-
-        
-        
         
         '''
 
@@ -412,16 +398,17 @@ class DoorController(Chart):
 def test_fix_and_filter():
     chart = ExampleChart()
     chart.create()
-    assert list(chart.assignments) == [ {'y': 1, 'x': 1, 'z': 0},
-                                        {'y': 0, 'x': 1, 'z': 1},
-                                        {'y': 1, 'x': 0},
-                                        {'y': 0, 'x': 0},
-                                        {'b': 1, 'z': 1},
-                                        {'b': 0, 'z': 0},
-                                        {'a': 0, 'x': 1, 'p': 1},
-                                        {'a': 1, 'x': 0, 'p': 1},
-                                        {'x': 1, 'p': 0},
-                                        {'x': 0, 'p': 0}]
+    for d in [ {'y': 1, 'x': 1, 'z': 0},
+                {'y': 0, 'x': 1, 'z': 1},
+                {'y': 1, 'x': 0},
+                {'y': 0, 'x': 0},
+                {'b': 1, 'z': 1},
+                {'b': 0, 'z': 0},
+                {'a': 0, 'x': 1, 'p': 1},
+                {'a': 1, 'x': 0, 'p': 1},
+                {'x': 1, 'p': 0},
+                {'x': 0, 'p': 0}]: 
+        assert d in list(chart.assignments)
     print("Initial assignments")
     print("-"*40)
     for asgn in chart:
@@ -455,12 +442,13 @@ def test_fix_and_filter():
 def test_input_modification():
     prf = Preferences()
     prf.create()
-    assert list(prf) == [{'Y': 6, 'X': 6, 'Z': 4},
-                        {'Y': 3, 'X': 6, 'Z': 6},
-                        {'Y': 5, 'X': 5, 'Z': 4},
-                        {'Y': 3, 'X': 5, 'Z': 6},
-                        {'Y': 5, 'X': 2, 'Z': 6},
-                        {'Y': 6, 'X': 2, 'Z': 6}]
+    for d in [{'Y': 6, 'X': 6, 'Z': 4},
+            {'Y': 3, 'X': 6, 'Z': 6},
+            {'Y': 5, 'X': 5, 'Z': 4},
+            {'Y': 3, 'X': 5, 'Z': 6},
+            {'Y': 5, 'X': 2, 'Z': 6},
+            {'Y': 6, 'X': 2, 'Z': 6}]:
+        assert d in list(prf)
 
 def test_fetch():
     acsp = AlgebraicCSP()
@@ -502,9 +490,54 @@ def test_single_evaluation():
 	assert f(1,2) == 3
 	assert Chooser.apply(f,1,2) == [-1, 3]	
 
+def test_stm():
+    def stm(chooser):
+        cmds = []
+        while True:
+            ## choose one commamd
+            cmd = chooser.choose(["cmd1","cmd2","cmd3"])
+            ## add command to list
+            cmds.append(cmd)
+            ## evaluate termination condition
+            if len(cmds) == 3 and cmds.count(cmd) == 1:
+                return cmds
+            elif len(cmds)>3:
+                return
+    return Chooser.apply(stm)
+
+def simpleflow(chooser):
+    x = chooser.choose([1,2])+chooser.choose([3,5])+7
+    return x
+
+def test_simpleflow():
+    assert set(Chooser.apply(simpleflow)) == {11, 12, 13, 14}, set(Chooser.apply(simpleflow))
+
+def chooser_stm(chooser):
+    transitions  = [("init", "locked")]
+    trans, state = transitions[0]
+    while True:
+        trans = chooser.choose(["push","coin"])
+        if state == "locked":
+            if trans == "coin":
+                state = "unlocked"
+        elif state == "unlocked":
+            if trans == "coin":
+                state = "locked"        
+        transitions.append((trans, state))
+        if transitions.count((trans, state))>1:  
+            if len(transitions)>3:
+                return transitions
+            return
+
 if __name__ == '__main__':
+
     test_fix_and_filter()
     test_input_modification()
     test_door_controller()
     test_fetch()
     test_composite_chart()
+    test_single_evaluation()
+    test_stm()
+    test_simpleflow()
+    Chooser.apply(chooser_stm)
+
